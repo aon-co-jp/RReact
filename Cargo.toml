@@ -1,0 +1,13 @@
+[package]
+name = "rreact"
+description = "RReact: React (including the React Native / React Mobile component model) reimplemented from scratch in Rust, targeting Poem-based SSR + WASM hydration."
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/aon-co-jp/RReact"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[dependencies]
