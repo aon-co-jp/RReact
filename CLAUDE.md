@@ -41,11 +41,20 @@ Rust + Poemで再現するプロジェクト。`RHTML5`/`RCSS3`/`RTypeScript`/
   Mobile相当の非HTMLターゲットへのレンダリング、Fiberのような
   中断可能なレンダリング・優先度スケジューリング。
 - **検証**: `cargo test`で10件全green(VNodeビルダー1件+差分計算9件)。
-  `cargo test --features dom_bridge`で14件全green(上記10件+
-  `dom_bridge`4件: 単純要素へのスタイルマージ・子孫結合子解決・
+  `cargo test --features dom_bridge`で16件全green(上記10件+
+  `dom_bridge`6件: 単純要素へのスタイルマージ・子孫結合子解決・
   非マッチ時にstyle属性を付けないこと・RHTML→RCSS→RReactの
-  End-to-Endパイプラインで作った2つの木をdiffに渡せることの確認)。
+  End-to-Endパイプラインで作った2つの木をdiffに渡せることの確認・
+  **2026-07-18追加**: 子結合子(`>`)が直接の親のみに一致し祖父母には
+  一致しないことの実地確認、隣接兄弟結合子(`+`)が実際にパースした
+  `<ul><li>`列の中で直前の兄弟の有無を正しく判定することの確認)。
   警告0件。
+- **2026-07-18: RCSS側のSelector型変更に追従**: RCSSが`Selector`型を
+  `Vec<CompoundSelector>`から`Vec<SelectorSegment>`へ変更(子/隣接兄弟
+  結合子対応)したのに伴い、`render_nodes`/`render_node`が
+  `preceding_siblings`(直前の兄弟から順に並べた配列、テキスト/
+  コメントノードは兄弟結合子の判定対象外)を追跡・伝播するよう変更。
+  `ElementRef`に`Clone, Copy`を追加(兄弟列に値として保持するため)。
 
 ## 次にすべきこと
 

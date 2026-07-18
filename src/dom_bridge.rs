@@ -26,6 +26,7 @@ use crate::vnode::{VElement, VNode};
 
 /// `rhtml5::Element`への参照を`rcss3::ElementLike`として扱うための
 /// ローカルなラッパー(orphan ruleのため必要な薄いアダプタ)。
+#[derive(Clone, Copy)]
 pub struct ElementRef<'a>(pub &'a Element);
 
 impl<'a> ElementLike for ElementRef<'a> {
@@ -50,17 +51,31 @@ pub fn render_to_vnode(document: &Document, stylesheet: &[Rule]) -> Vec<VNode> {
     render_nodes(&document.children, &[], stylesheet)
 }
 
-fn render_nodes(nodes: &[Node], ancestors: &[&ElementRef], stylesheet: &[Rule]) -> Vec<VNode> {
-    nodes.iter().filter_map(|node| render_node(node, ancestors, stylesheet)).collect()
+fn render_nodes<'a>(nodes: &'a [Node], ancestors: &[&ElementRef<'a>], stylesheet: &[Rule]) -> Vec<VNode> {
+    // 隣接兄弟結合子(`+`)のマッチングに使う、ここまで見た要素ノードの列
+    // (テキスト/コメントノードは兄弟結合子の判定対象外、実DOMの
+    // セマンティクスと同じ)。
+    let mut preceding_elements: Vec<ElementRef<'a>> = Vec::new();
+    let mut out = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let preceding_siblings: Vec<&ElementRef> = preceding_elements.iter().rev().collect();
+        if let Some(vnode) = render_node(node, ancestors, &preceding_siblings, stylesheet) {
+            out.push(vnode);
+        }
+        if let Node::Element(el) = node {
+            preceding_elements.push(ElementRef(el));
+        }
+    }
+    out
 }
 
-fn render_node(node: &Node, ancestors: &[&ElementRef], stylesheet: &[Rule]) -> Option<VNode> {
+fn render_node(node: &Node, ancestors: &[&ElementRef], preceding_siblings: &[&ElementRef], stylesheet: &[Rule]) -> Option<VNode> {
     match node {
         Node::Text(text) => Some(VNode::Text(text.clone())),
         Node::Comment(_) => None,
         Node::Element(el) => {
             let el_ref = ElementRef(el);
-            let computed = compute_style(stylesheet, &el_ref, ancestors);
+            let computed = compute_style(stylesheet, &el_ref, ancestors, preceding_siblings);
 
             let mut attrs: BTreeMap<String, String> =
                 el.attrs.iter().map(|a| (a.name.clone(), a.value.clone())).collect();
@@ -119,6 +134,38 @@ mod tests {
         let VNode::Element(section) = &nodes[0] else { panic!("expected element") };
         let VNode::Element(p) = &section.children[0] else { panic!("expected element") };
         assert_eq!(p.attrs.get("style"), None);
+    }
+
+    #[test]
+    fn child_combinator_resolves_through_the_parsed_immediate_parent() {
+        let doc = parse_document(r#"<div><section><p>hi</p></section></div>"#);
+        // "div > p" のdivは直接の親(section)ではなく祖父母なので不一致、
+        // "section > p" は直接の親なので一致するはず。
+        let stylesheet = parse_stylesheet("div > p { color: red; } section > p { color: purple; }");
+        let nodes = render_to_vnode(&doc, &stylesheet);
+
+        let VNode::Element(div) = &nodes[0] else { panic!("expected element") };
+        let VNode::Element(section) = &div.children[0] else { panic!("expected element") };
+        let VNode::Element(p) = &section.children[0] else { panic!("expected element") };
+        assert_eq!(p.attrs.get("style"), Some(&"color: purple;".to_string()));
+    }
+
+    #[test]
+    fn adjacent_sibling_combinator_resolves_through_the_parsed_sibling_list() {
+        let doc = parse_document(r#"<ul><li>a</li><li>b</li><li>c</li></ul>"#);
+        let stylesheet = parse_stylesheet("li + li { color: orange; }");
+        let nodes = render_to_vnode(&doc, &stylesheet);
+
+        let VNode::Element(ul) = &nodes[0] else { panic!("expected element") };
+        let VNode::Element(first) = &ul.children[0] else { panic!("expected element") };
+        let VNode::Element(second) = &ul.children[1] else { panic!("expected element") };
+        let VNode::Element(third) = &ul.children[2] else { panic!("expected element") };
+
+        // 最初のliには直前の兄弟が無いので不一致。
+        assert_eq!(first.attrs.get("style"), None);
+        // 2番目・3番目はどちらも直前にliを持つので一致。
+        assert_eq!(second.attrs.get("style"), Some(&"color: orange;".to_string()));
+        assert_eq!(third.attrs.get("style"), Some(&"color: orange;".to_string()));
     }
 
     #[test]
