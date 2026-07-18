@@ -17,11 +17,12 @@
 //! パッチ適用は次段階の課題として明記、`RReact`側CLAUDE.mdの
 //! 「次にすべきこと」参照)。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rcss3::{compute_style, style_to_string, ElementLike, Rule};
-use rhtml5::{Document, Element, Node};
+use rhtml5::{Attribute, Document, Element, Node};
 
+use crate::diff::{AttrsPatch, ChildPatch, Patch};
 use crate::vnode::{VElement, VNode};
 
 /// `rhtml5::Element`への参照を`rcss3::ElementLike`として扱うための
@@ -91,6 +92,132 @@ fn render_node(node: &Node, ancestors: &[&ElementRef], preceding_siblings: &[&El
             Some(VNode::Element(VElement { tag: el.tag_name.clone(), attrs, key: None, children }))
         }
     }
+}
+
+// --- `Patch`の実DOM(`rhtml5::Node`)への適用(2026-07-19新規) ---
+//
+// この生態系には`web-sys`/`wasm-bindgen`もブラウザDOMも存在しない
+// (`Cargo.toml`確認済み、依存はゼロ)。本クレートおよびRHTML/RCSSは
+// 「一からのRust実装」であり、`RReact`にとっての「実DOM」とは
+// `rhtml5::Node`/`Element`木のことを指す(`RFrontEnd`側CLAUDE.mdの
+// 「お引越し可能な設計判断」節に「`Patch`ベースの差分適用……
+// `RHTML::Node`への実適用に変換するアダプタ」と明記されている通り)。
+// よって本節は`diff::Patch`を`rhtml5::Node`木へ反映する処理を提供する
+// (ブラウザや`wasm-bindgen-test`は一切不要、`cargo test`の通常の
+// 単体テストで実DOM相当の木を直接検証できる)。
+//
+// # 対応関係(ノードの特定方法)
+// `render_to_vnode`は`rhtml5::Node::Comment`を読み飛ばすため、
+// コメントノードを含まない文書であれば、ある`Node`木から
+// `render_to_vnode`相当の変換で得た`VNode`木は**兄弟インデックスが
+// 1対1で対応する**(挿入・削除・置換もすべて`diff`が返す
+// インデックスに従って同じ`rhtml5::Node`の子リストへそのまま反映
+// できる)。コメントを含む文書ではこの対応が崩れる、という制約は
+// `render_to_vnode`のコメント読み飛ばし方針に由来する既存の限界の
+// 延長として明記しておく(次段階の課題)。
+//
+// # 子要素差分の適用アルゴリズム
+// `diff::diff_children`は「変化が無く、かつold_index==new_indexの
+// 位置」については`ChildPatch`を一切出力しない、という重要な性質を
+// 持つ(`diff.rs`のコメント・実装を参照)。つまり`ChildPatch`列に
+// 現れない新しい位置`new_index`は、必ず「同じ`new_index`位置に
+// あった古い子がそのまま変化していない」ことを意味する。この不変条件
+// を使うことで、位置ごとの由来(挿入/更新/そのまま)を1回のパスで
+// 決定でき、要素の移動を伴う複雑な配列操作を避けられる。
+pub fn apply_patch(node: &mut Node, patch: &Patch) {
+    match patch {
+        Patch::NoOp => {}
+        Patch::Replace(new_vnode) => *node = vnode_to_node(new_vnode),
+        Patch::UpdateText(text) => {
+            if let Node::Text(current) = node {
+                *current = text.clone();
+            }
+            // `node`がTextでない場合は、`patch`が対応していない木から
+            // 計算されたことを意味する(呼び出し側の前提違反)。
+            // パニックさせず黙って無視する(第一段の割り切り)。
+        }
+        Patch::UpdateElement { attrs, children } => {
+            if let Node::Element(el) = node {
+                if let Some(attrs_patch) = attrs {
+                    apply_attrs_patch(&mut el.attrs, attrs_patch);
+                }
+                if let Some(children_patches) = children {
+                    apply_children_patches(&mut el.children, children_patches);
+                }
+            }
+        }
+    }
+}
+
+/// `VNode`を新規の`rhtml5::Node`へ変換する(`Patch::Replace`・
+/// `ChildPatch::Insert`で新しく実DOM側に現れるノードの生成に使う、
+/// `render_node`の逆方向の変換に相当)。
+fn vnode_to_node(vnode: &VNode) -> Node {
+    match vnode {
+        VNode::Text(text) => Node::Text(text.clone()),
+        VNode::Element(el) => Node::Element(Element {
+            tag_name: el.tag.clone(),
+            attrs: el.attrs.iter().map(|(name, value)| Attribute { name: name.clone(), value: value.clone() }).collect(),
+            children: el.children.iter().map(vnode_to_node).collect(),
+        }),
+    }
+}
+
+fn apply_attrs_patch(attrs: &mut Vec<Attribute>, patch: &AttrsPatch) {
+    for (name, value) in &patch.set {
+        if let Some(existing) = attrs.iter_mut().find(|a| &a.name == name) {
+            existing.value = value.clone();
+        } else {
+            attrs.push(Attribute { name: name.clone(), value: value.clone() });
+        }
+    }
+    if !patch.remove.is_empty() {
+        attrs.retain(|a| !patch.remove.contains(&a.name));
+    }
+}
+
+fn apply_children_patches(children: &mut Vec<Node>, patches: &[ChildPatch]) {
+    // 古い子リストのスナップショット(`Update`の`old_index`・
+    // 「パッチに現れない位置はold_index==new_indexでそのまま」という
+    // 不変条件の両方を、このスナップショットに対して評価する)。
+    let old_snapshot = children.clone();
+
+    let mut inserts: HashMap<usize, &VNode> = HashMap::new();
+    let mut updates: HashMap<usize, (usize, &Patch)> = HashMap::new();
+    let mut removed_old_indices: HashSet<usize> = HashSet::new();
+
+    for patch in patches {
+        match patch {
+            ChildPatch::Insert { index, node } => {
+                inserts.insert(*index, node);
+            }
+            ChildPatch::Remove { index } => {
+                removed_old_indices.insert(*index);
+            }
+            ChildPatch::Update { old_index, new_index, patch } => {
+                updates.insert(*new_index, (*old_index, patch.as_ref()));
+            }
+        }
+    }
+
+    let final_len = old_snapshot.len() + inserts.len() - removed_old_indices.len();
+    let mut result = Vec::with_capacity(final_len);
+
+    for new_index in 0..final_len {
+        if let Some(vnode) = inserts.get(&new_index) {
+            result.push(vnode_to_node(vnode));
+        } else if let Some((old_index, inner_patch)) = updates.get(&new_index) {
+            let mut moved = old_snapshot[*old_index].clone();
+            apply_patch(&mut moved, inner_patch);
+            result.push(moved);
+        } else {
+            // パッチが無い位置は、上記の不変条件によりold_index==new_index
+            // かつ変化していない子(そのまま複製すればよい)。
+            result.push(old_snapshot[new_index].clone());
+        }
+    }
+
+    *children = result;
 }
 
 #[cfg(test)]
@@ -198,5 +325,129 @@ mod tests {
         assert_eq!(p_children.len(), 1);
         let ChildPatch::Update { patch: text_patch, .. } = &p_children[0] else { panic!("expected an update patch") };
         assert_eq!(**text_patch, Patch::UpdateText("bye".to_string()));
+    }
+
+    // --- `apply_patch`(`Patch`の実DOM(`rhtml5::Node`)への適用)のテスト ---
+    // ここでの「実DOM」は`web-sys`のブラウザDOMではなく、本生態系に
+    // おける実DOM相当の`rhtml5::Node`木そのもの(依存ゼロで存在する
+    // ため、通常の`cargo test`で直接検証できる——`wasm-bindgen-test`や
+    // ヘッドレスブラウザは不要)。
+
+    /// RHTMLでパースした文書の最初のトップレベル子(`Node`)を、対応する
+    /// `VNode`(`render_to_vnode`の出力)と一緒に返す小さなヘルパー
+    /// (「実DOM」と「そこから作った仮想DOM」の両方を同じHTMLから
+    /// 用意し、以後は仮想DOM側だけを新しい木にdiffして実DOM側へ
+    /// `apply_patch`する、という実際の使い方をそのまま再現する)。
+    fn real_and_virtual(html: &str) -> (Node, VNode) {
+        let doc = parse_document(html);
+        let vnodes = render_to_vnode(&doc, &[]);
+        (doc.children.into_iter().next().unwrap(), vnodes.into_iter().next().unwrap())
+    }
+
+    #[test]
+    fn apply_patch_updates_text_in_place() {
+        let (mut real, old_vnode) = real_and_virtual("<p>hi</p>");
+        let new_vnode = VNode::element("p").child(VNode::text("bye")).build();
+
+        // pそのものの差分は子(テキスト)のUpdate、その中身がUpdateText。
+        let Patch::UpdateElement { children: Some(children), .. } = diff(&old_vnode, &new_vnode) else {
+            panic!("expected element update")
+        };
+        let ChildPatch::Update { patch: text_patch, .. } = &children[0] else { panic!("expected update") };
+
+        let Node::Element(el) = &mut real else { panic!("expected element") };
+        apply_patch(&mut el.children[0], text_patch);
+
+        assert_eq!(el.children[0], Node::Text("bye".to_string()));
+    }
+
+    #[test]
+    fn apply_patch_sets_and_removes_attributes() {
+        let (mut real, old_vnode) = real_and_virtual(r#"<div class="a" disabled></div>"#);
+        let new_vnode = VNode::element("div").attr("class", "b").build();
+
+        let patch = diff(&old_vnode, &new_vnode);
+        apply_patch(&mut real, &patch);
+
+        let Node::Element(el) = &real else { panic!("expected element") };
+        assert_eq!(el.attr("class"), Some("b"));
+        assert_eq!(el.attr("disabled"), None);
+    }
+
+    #[test]
+    fn apply_patch_inserts_and_removes_children() {
+        let (mut real, old_vnode) = real_and_virtual("<ul><li>a</li><li>b</li></ul>");
+        let new_vnode = VNode::element("ul")
+            .child(VNode::element("li").child(VNode::text("a")).build())
+            .child(VNode::element("li").child(VNode::text("c")).build())
+            .build();
+
+        let patch = diff(&old_vnode, &new_vnode);
+        apply_patch(&mut real, &patch);
+
+        let Node::Element(ul) = &real else { panic!("expected element") };
+        assert_eq!(ul.children.len(), 2);
+        let Node::Element(second) = &ul.children[1] else { panic!("expected element") };
+        assert_eq!(second.children, vec![Node::Text("c".to_string())]);
+    }
+
+    #[test]
+    fn apply_patch_reorders_keyed_children_and_preserves_untouched_ones() {
+        let old_vnode = VNode::element("ul")
+            .child(VNode::element("li").key("a").child(VNode::text("A")).build())
+            .child(VNode::element("li").key("b").child(VNode::text("B")).build())
+            .child(VNode::element("li").key("c").child(VNode::text("C")).build())
+            .build();
+        let mut real = vnode_to_node(&old_vnode);
+
+        // b, a, c(cはそのまま=old_index==new_index==2、パッチには現れない)。
+        let new_vnode = VNode::element("ul")
+            .child(VNode::element("li").key("b").child(VNode::text("B")).build())
+            .child(VNode::element("li").key("a").child(VNode::text("A")).build())
+            .child(VNode::element("li").key("c").child(VNode::text("C")).build())
+            .build();
+
+        let patch = diff(&old_vnode, &new_vnode);
+        apply_patch(&mut real, &patch);
+
+        let Node::Element(ul) = &real else { panic!("expected element") };
+        assert_eq!(ul.children.len(), 3);
+        let texts: Vec<&str> = ul
+            .children
+            .iter()
+            .map(|n| {
+                let Node::Element(li) = n else { panic!("expected li") };
+                let Node::Text(t) = &li.children[0] else { panic!("expected text") };
+                t.as_str()
+            })
+            .collect();
+        assert_eq!(texts, vec!["B", "A", "C"]);
+    }
+
+    #[test]
+    fn apply_patch_replaces_node_when_tag_changes() {
+        let old_vnode = VNode::element("div").build();
+        let mut real = vnode_to_node(&old_vnode);
+        let new_vnode = VNode::element("span").attr("class", "x").build();
+
+        let patch = diff(&old_vnode, &new_vnode);
+        apply_patch(&mut real, &patch);
+
+        let Node::Element(el) = &real else { panic!("expected element") };
+        assert_eq!(el.tag_name, "span");
+        assert_eq!(el.attr("class"), Some("x"));
+    }
+
+    #[test]
+    fn apply_patch_no_op_leaves_real_dom_untouched() {
+        let vnode = VNode::element("div").attr("class", "a").child(VNode::text("hi")).build();
+        let mut real = vnode_to_node(&vnode);
+        let untouched = real.clone();
+
+        let patch = diff(&vnode, &vnode.clone());
+        assert_eq!(patch, Patch::NoOp);
+        apply_patch(&mut real, &patch);
+
+        assert_eq!(real, untouched);
     }
 }
