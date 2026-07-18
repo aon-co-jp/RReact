@@ -12,5 +12,11 @@
 pub mod diff;
 pub mod vnode;
 
+#[cfg(feature = "dom_bridge")]
+pub mod dom_bridge;
+
 pub use diff::{AttrsPatch, ChildPatch, Patch};
 pub use vnode::{VElement, VNode};
+
+#[cfg(feature = "dom_bridge")]
+pub use dom_bridge::{render_to_vnode, ElementRef};

@@ -11,3 +11,12 @@ repository = "https://github.com/aon-co-jp/RReact"
 unsafe_code = "deny"
 
 [dependencies]
+rhtml5 = { path = "../RHTML", optional = true }
+rcss3 = { path = "../RCSS", optional = true }
+
+[features]
+# RHTML(rhtml5)でパースしたDOM木にRCSS(rcss3)でスタイル解決した結果を
+# RReactのVNode木へ変換する、RHTML/RCSS/RReact相互接続用のオプション
+# フィーチャ(既定では無効——rreact自体は単独でも使えるように、
+# 依存を必須にしない設計)。
+dom_bridge = ["dep:rhtml5", "dep:rcss3"]

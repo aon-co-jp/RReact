@@ -3,5 +3,17 @@
 version = 3
 
 [[package]]
+name = "rcss3"
+version = "0.1.0"
+
+[[package]]
+name = "rhtml5"
+version = "0.1.0"
+
+[[package]]
 name = "rreact"
 version = "0.1.0"
+dependencies = [
+ "rcss3",
+ "rhtml5",
+]
