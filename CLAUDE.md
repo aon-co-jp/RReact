@@ -69,10 +69,10 @@ Rust + Poemで再現するプロジェクト。`RHTML5`/`RCSS3`/`RTypeScript`/
 ## 次にすべきこと
 
 1. 子要素差分の最小移動数計算への改善(現状は正しいが最適とは限らない)
-2. コンポーネントモデル第二段(`use_effect`相当・複数コンポーネントを
-   束ねたツリー全体の再レンダーループ——現状の`hooks`モジュールは
-   フック状態の管理のみで、ツリー走査してdirtyなインスタンスだけ
-   再render→diff→`apply_patch`する「アプリループ」自体はまだ無い)
+2. コンポーネントモデル第三段(`use_effect`相当)
+3. `App`のdirty検知をコンポーネント単位に絞る性能改善(現状はv1の
+   割り切りとして「dirtyが1件でもあればルートから丸ごと再レンダー」
+   ——正しさは保つが、大きなツリーでは無駄な再評価が発生する)
 
 ## 関連プロジェクト
 
@@ -80,6 +80,25 @@ Rust + Poemで再現するプロジェクト。`RHTML5`/`RCSS3`/`RTypeScript`/
 - [open-raid-z](https://github.com/aon-co-jp/open-raid-z) — 開発ルールの正本
 
 ## HANDOFF
+
+- **2026-09-13 ツリー全体の再レンダーループ(「アプリループ」)実装**:
+  `src/app.rs`新設。`App::mount(root_id, render_fn)`でルートを初回
+  render、`App::tick()`が`hooks::any_dirty()`でツリー全体の変化を検知し、
+  dirtyなら`clear_all_dirty()`で消費してからルートを丸ごと再レンダー→
+  `diff`→保持ツリー更新、という一連の流れを1回分実行して`Patch`を返す
+  (dirtyが無ければ`None`、無駄な再レンダーをしない)。`dom_bridge`
+  フィーチャ有効時は`App::tick_and_apply`で実DOMへの`apply_patch`まで
+  1回で行う。**設計の割り切り(v1)**: 個別のコンポーネントだけを狙った
+  差分再レンダーの最適化はせず、ルートから丸ごと再評価する
+  (`render_fn`の中でネストして`hooks::run_component`を呼ぶことで
+  子コンポーネントを表現する設計のため、丸ごと再評価すれば正しく
+  最新の子の状態も反映される——正しさ優先、性能は次段階の課題として
+  「次にすべきこと」に記載)。`hooks`モジュールに`any_dirty`/
+  `clear_all_dirty`を追加。テスト4件(`app`3件+`hooks`1件)追加、
+  `cargo test`(既定)20件・`--features dom_bridge`32件すべてgreen・
+  警告0件。aruaru.pro(新規マーケットプレイスプロジェクト)のフロント
+  基盤として必要になり着手、次はaruaru.pro側でこの`App`を実際に使う
+  最小のUI(カテゴリ一覧表示等)を試すのが妥当。
 
 - **2026-09-13 コンポーネントモデル第一段(関数コンポーネント+
   `use_state`)実装**: `src/hooks.rs`新設。呼び出し側が割り当てる

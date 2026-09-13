@@ -77,6 +77,23 @@ pub fn take_dirty(id: ComponentId) -> bool {
     DIRTY.with(|dirty| dirty.borrow_mut().remove(&id))
 }
 
+/// ツリー全体を通じて、いずれかのコンポーネントインスタンスが
+/// 再レンダーを要求しているか(消費はしない、`App::tick`が「今回は
+/// 再レンダーが必要か」を判定するための問い合わせ専用)。
+pub fn any_dirty() -> bool {
+    DIRTY.with(|dirty| !dirty.borrow().is_empty())
+}
+
+/// dirtyフラグを全インスタンスまとめて消費する。ルートから丸ごと
+/// 再レンダーする「アプリループ」(`App::tick`)は、個々のインスタンス
+/// ごとに`take_dirty`する代わりに、再レンダー開始時にまとめて消費する
+/// ——丸ごと再レンダーする以上、個別のdirtyフラグを取りこぼす心配は無い
+/// (どの`ComponentId`がdirtyだったかを問わず、次回の変化まで再度
+/// `any_dirty`がfalseを返すようにするのが目的)。
+pub fn clear_all_dirty() {
+    DIRTY.with(|dirty| dirty.borrow_mut().clear());
+}
+
 /// 状態を更新するためのハンドル。`set`を呼ぶと即座にストアへ反映され、
 /// 対応する`ComponentId`が`take_dirty`で観測可能になる
 /// (Reactのように非同期にバッチングはしない、素朴な同期反映)。
@@ -231,6 +248,27 @@ mod tests {
         assert_eq!(age, 31);
         name_setter.set("bob".to_string());
         drop_instance(id);
+    }
+
+    #[test]
+    fn any_dirty_reflects_whether_any_instance_is_dirty_and_clear_all_dirty_resets_it() {
+        let id_a = 8;
+        let id_b = 9;
+        let setter_a = run_component(id_a, || {
+            let (_count, set) = use_state(|| 0i32);
+            set
+        });
+        run_component(id_b, || {
+            let (_count, _set) = use_state(|| 0i32);
+        });
+        assert!(!any_dirty());
+        setter_a.set(1);
+        assert!(any_dirty());
+        clear_all_dirty();
+        assert!(!any_dirty());
+        assert!(!take_dirty(id_a), "clear_all_dirty must also clear the per-instance flag");
+        drop_instance(id_a);
+        drop_instance(id_b);
     }
 
     #[test]

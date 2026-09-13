@@ -10,6 +10,7 @@
 //! フック、`hooks`モジュール)を実装済み。React Native/React Mobile
 //! 相当の非HTMLターゲットへのレンダリングは引き続き未着手。
 
+pub mod app;
 pub mod diff;
 pub mod hooks;
 pub mod vnode;
@@ -17,6 +18,7 @@ pub mod vnode;
 #[cfg(feature = "dom_bridge")]
 pub mod dom_bridge;
 
+pub use app::App;
 pub use diff::{AttrsPatch, ChildPatch, Patch};
 pub use hooks::{run_component, take_dirty, use_state, ComponentId, StateSetter};
 pub use vnode::{VElement, VNode};
