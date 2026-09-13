@@ -24,4 +24,4 @@ pub use hooks::{run_component, take_dirty, use_state, ComponentId, StateSetter};
 pub use vnode::{VElement, VNode};
 
 #[cfg(feature = "dom_bridge")]
-pub use dom_bridge::{apply_patch, render_to_vnode, ElementRef};
+pub use dom_bridge::{apply_patch, render_to_html, render_to_vnode, ElementRef};

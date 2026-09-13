@@ -52,6 +52,18 @@ pub fn render_to_vnode(document: &Document, stylesheet: &[Rule]) -> Vec<VNode> {
     render_nodes(&document.children, &[], stylesheet)
 }
 
+/// `VNode`(単体、またはルート`VNode::Element`)をSSR用のHTML文字列へ
+/// 直列化する。`App::mount`/`tick`が返す木をそのままレスポンスボディに
+/// する、という初回描画(初回HTML生成)専用の経路(2回目以降の差分は
+/// `apply_patch`が担う——本関数はそちらとは無関係、毎回丸ごと文字列化
+/// する点に注意)。
+pub fn render_to_html(vnode: &VNode) -> String {
+    let node = vnode_to_node(vnode);
+    let mut out = String::new();
+    rhtml5::serialize_node(&node, &mut out);
+    out
+}
+
 fn render_nodes<'a>(nodes: &'a [Node], ancestors: &[&ElementRef<'a>], stylesheet: &[Rule]) -> Vec<VNode> {
     // 隣接兄弟結合子(`+`)のマッチングに使う、ここまで見た要素ノードの列
     // (テキスト/コメントノードは兄弟結合子の判定対象外、実DOMの
@@ -151,8 +163,9 @@ pub fn apply_patch(node: &mut Node, patch: &Patch) {
 
 /// `VNode`を新規の`rhtml5::Node`へ変換する(`Patch::Replace`・
 /// `ChildPatch::Insert`で新しく実DOM側に現れるノードの生成に使う、
-/// `render_node`の逆方向の変換に相当)。
-fn vnode_to_node(vnode: &VNode) -> Node {
+/// `render_node`の逆方向の変換に相当)。`render_to_html`からも、
+/// SSR時の初回HTML化のために呼ばれる。
+pub fn vnode_to_node(vnode: &VNode) -> Node {
     match vnode {
         VNode::Text(text) => Node::Text(text.clone()),
         VNode::Element(el) => Node::Element(Element {
@@ -226,6 +239,17 @@ mod tests {
     use crate::diff::{diff, ChildPatch, Patch};
     use rcss3::parse_stylesheet;
     use rhtml5::parse_document;
+
+    #[test]
+    fn render_to_html_serializes_a_vnode_tree_including_attributes_and_text() {
+        let vnode = VNode::element("ul")
+            .attr("class", "list")
+            .child(VNode::element("li").child(VNode::text("A")).build())
+            .child(VNode::element("li").child(VNode::text("B")).build())
+            .build();
+        let html = render_to_html(&vnode);
+        assert_eq!(html, r#"<ul class="list"><li>A</li><li>B</li></ul>"#);
+    }
 
     #[test]
     fn simple_element_gets_computed_style_merged_into_attrs() {
