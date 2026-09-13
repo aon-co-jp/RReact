@@ -1,6 +1,16 @@
-# 開発方針＆開発環境ルール(RReact)
+# 開発方針＆開発環境ルール(RS-React)
 
-作業ドライブは`F:\open-runo`。この節は[`open-raid-z`](https://github.com/aon-co-jp/open-raid-z)の`CLAUDE.md`を正本とし、各プロジェクトへコピーして同期する方針に準じる。
+作業ドライブは`F:\runo`。この節は[`open-raid-z`](https://github.com/aon-co-jp/open-raid-z)の`CLAUDE.md`を正本とし、各プロジェクトへコピーして同期する方針に準じる。
+
+## リポジトリ改称(2026-09-13)
+
+`RReact`→`RS-React`へGitHub上でrename済み(crate名も`rreact`→
+`rs-react`へ改称)。`aruaru.pro`(コンコナラ型スキルマーケットプレイス+
+求人サイト統合の新規プロジェクト)向けのフロント基盤整備に合わせた、
+`RFrontEnd`傘下プロジェクトのネーミング統一の一環(ユーザー指示、
+2026-09-13:「RReact自体をRS-Reactへ改称」。ネーミングルールはまだ
+全体で統一されておらず、その都度指示する方針)。以下の記述内の
+`RReact`表記は改称前の履歴として残す。
 
 ## このプロジェクトの構想(2026-07-18新設)
 
