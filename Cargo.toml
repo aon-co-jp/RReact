@@ -11,8 +11,8 @@ repository = "https://github.com/aon-co-jp/RS-React"
 unsafe_code = "deny"
 
 [dependencies]
-rhtml5 = { path = "../RHTML", optional = true }
-rcss3 = { path = "../RCSS", optional = true }
+rhtml5 = { path = "../RS-HTML", optional = true }
+rcss3 = { path = "../RS-CSS", optional = true }
 
 [features]
 # RHTML(rhtml5)でパースしたDOM木にRCSS(rcss3)でスタイル解決した結果を
